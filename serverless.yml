@@ -1,16 +1,27 @@
-org: geraldocolchado
+org: ljosue
 service: api-comentario
 
 provider:
   name: aws
-  runtime: python3.13	
-  # Default memory size for functions (default: 1024MB)
+  runtime: python3.13
+  region: us-east-1
+  stage: ${opt:stage, 'dev'}
+  # Defaults del curso
   memorySize: 1024
   timeout: 20
+  # IMPORTANTE: se respeta tu rol administrado (no se agregan statements aquí)
   iam:
-    role: arn:aws:iam::478701513931:role/LabRole	
+    role: arn:aws:iam::529168894975:role/LabRole
+
   environment:
+    # DynamoDB (como ya tenías)
     TABLE_NAME: ${sls:stage}-t_comentarios
+    # S3 (nuevo): nombre del bucket de ingesta por stage
+    BUCKET_INGESTA: ${self:custom.bucketName}
+
+custom:
+  # Bucket de ingesta por stage: api-comentario-ingesta-dev/test/prod
+  bucketName: ${self:service}-ingesta-${sls:stage}
 
 functions:
   crear:
@@ -21,9 +32,45 @@ functions:
           method: post
           cors: true
           integration: lambda
+    environment:
+      # Asegura que la función vea las mismas vars
+      TABLE_NAME: ${sls:stage}-t_comentarios
+      BUCKET_INGESTA: ${self:custom.bucketName}
+
+package:
+  patterns:
+    - '!node_modules/**'
+    - '!venv/**'
+    - 'comentario.py'
 
 resources:
   Resources:
+    # === S3 de ingesta por stage ===
+    IngestaBucket:
+      Type: AWS::S3::Bucket
+      Properties:
+        BucketName: ${self:custom.bucketName}
+        PublicAccessBlockConfiguration:
+          BlockPublicAcls: true
+          BlockPublicPolicy: true
+          IgnorePublicAcls: true
+          RestrictPublicBuckets: true
+        VersioningConfiguration:
+          Status: Enabled
+        BucketEncryption:
+          ServerSideEncryptionConfiguration:
+            - ServerSideEncryptionByDefault:
+                SSEAlgorithm: AES256
+      DeletionPolicy: Retain
+
+    IngestaBucketOwnership:
+      Type: AWS::S3::BucketOwnershipControls
+      Properties:
+        Bucket: ${self:custom.bucketName}
+        Rules:
+          - ObjectOwnership: BucketOwnerPreferred
+
+    # === Tu tabla DynamoDB (intacta) ===
     TablaComentarios:
       Type: AWS::DynamoDB::Table
       Properties:
@@ -38,5 +85,4 @@ resources:
             KeyType: HASH
           - AttributeName: uuid
             KeyType: RANGE
-        # Set the capacity to auto-scale
         BillingMode: PAY_PER_REQUEST
